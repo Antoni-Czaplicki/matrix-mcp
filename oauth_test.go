@@ -16,7 +16,10 @@ func TestOAuthFlow(t *testing.T) {
 	ctx := context.Background()
 	srv := httptest.NewUnstartedServer(nil)
 	issuer := "http://" + srv.Listener.Addr().String()
-	o, err := NewOAuth(ctx, testDB(t), issuer, "correct horse battery")
+	verify := func(_ context.Context, user, pw string) (bool, error) {
+		return user == "@me:example.com" && pw == "correct horse battery", nil
+	}
+	o, err := NewOAuth(ctx, testDB(t), issuer, "@me:example.com", verify)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +73,7 @@ func TestOAuthFlow(t *testing.T) {
 		t.Errorf("unregistered redirect_uri should be rejected, got %d", resp.StatusCode)
 	}
 
-	form := url.Values{"client_id": {clientID}, "redirect_uri": {"https://client.example/cb"}, "code_challenge": {challenge}, "state": {"xyz"}, "action": {"allow"}}
+	form := url.Values{"client_id": {clientID}, "redirect_uri": {"https://client.example/cb"}, "code_challenge": {challenge}, "state": {"xyz"}, "action": {"allow"}, "username": {"@me:example.com"}}
 	form.Set("password", "wrong")
 	if resp, _ := noRedirect.PostForm(srv.URL+"/authorize", form); resp.StatusCode != 401 {
 		t.Errorf("wrong password: got %d", resp.StatusCode)

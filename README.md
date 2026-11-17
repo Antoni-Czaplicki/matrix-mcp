@@ -7,7 +7,7 @@ It logs in as its own Matrix device, decrypts messages, and keeps a local full-t
 - **E2EE.** Built on [mautrix-go](https://github.com/mautrix/go). With your recovery key it cross-signs its device and imports the server-side key backup, so older history decrypts too.
 - **Search.** SQLite FTS5 index that survives restarts and folds diacritics, so `zolc` matches `żółć`. It backfills a configurable amount of history per room, and more on demand.
 - **Bridge-aware.** Detects each room's network (`m.bridge`) and the bridge management rooms, and can run bridge bot commands.
-- **Remote.** Streamable HTTP. Authenticate with a static bearer token (Claude Code, Codex, scripts) or OAuth 2.1 with dynamic client registration, which claude.ai and ChatGPT custom connectors need.
+- **Remote.** Streamable HTTP. Authenticate with a static bearer token (Claude Code, Codex, scripts) or OAuth 2.1 with dynamic client registration, which claude.ai and ChatGPT custom connectors need. OAuth sign-in uses the Matrix account itself: the consent page checks your username and password with the homeserver.
 
 ## Tools
 
@@ -42,8 +42,7 @@ The server needs a Matrix account it can log into with a password, ideally on th
 | `MATRIX_RECOVERY_KEY` | | Recovery (SSSS) key. Verifies the device and imports the key backup so old messages decrypt |
 | `PICKLE_KEY` | yes | Encrypts the crypto store. Never change it, or the device has to be recreated |
 | `MCP_BEARER_TOKEN` | yes | Static client token, at least 32 characters |
-| `PUBLIC_URL` | for OAuth | Public base URL, e.g. `https://matrix-mcp.example.com` |
-| `OAUTH_PASSWORD` | | Enables OAuth for custom connectors. You type it on the consent page |
+| `PUBLIC_URL` | for OAuth | Public base URL, e.g. `https://matrix-mcp.example.com`. Setting it enables OAuth for custom connectors |
 | `TZ` | | Time zone for date filters without an explicit offset, e.g. `Europe/Warsaw` |
 | `BACKFILL_PER_ROOM` | | Messages indexed per room on first start. Default 200 |
 | `DATA_DIR`, `LISTEN_ADDR`, `DEVICE_NAME` | | Defaults `/data`, `:8080`, `Matrix MCP` |
@@ -75,11 +74,11 @@ url = "https://matrix-mcp.example.com/mcp"
 bearer_token_env_var = "MATRIX_MCP_TOKEN"
 ```
 
-**claude.ai / Claude apps.** Set `PUBLIC_URL` and `OAUTH_PASSWORD`, then go to Settings → Connectors → Add custom connector and enter `https://matrix-mcp.example.com/mcp`. Claude registers itself and opens the consent page, where you enter the password.
+**claude.ai / Claude apps.** Set `PUBLIC_URL`, then go to Settings → Connectors → Add custom connector and enter `https://matrix-mcp.example.com/mcp`. Claude registers itself and opens the consent page, where you sign in with your Matrix username and password.
 
 **ChatGPT.** Enable developer mode (Settings → Apps → Advanced settings), then create an app with the same URL and OAuth authentication.
 
-OAuth access tokens last an hour and refresh tokens 60 days (they rotate on use). Tokens are stored hashed.
+Only the account the server runs as can sign in. The password is checked by logging in to the homeserver and immediately logging out again, so the homeserver's own rate limits apply. OAuth access tokens last an hour and refresh tokens 60 days (they rotate on use). Tokens are stored hashed.
 
 ## Development
 

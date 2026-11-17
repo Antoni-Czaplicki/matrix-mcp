@@ -32,7 +32,6 @@ type Config struct {
 	DeviceName      string
 	BackfillPerRoom int
 	PublicURL       string
-	OAuthPassword   string
 }
 
 func env(key, def string) string {
@@ -44,17 +43,16 @@ func env(key, def string) string {
 
 func loadConfig() (Config, error) {
 	cfg := Config{
-		Homeserver:    env("MATRIX_HOMESERVER", "http://matrix-synapse:8008"),
-		UserID:        env("MATRIX_USER_ID", ""),
-		Password:      os.Getenv("MATRIX_PASSWORD"),
-		RecoveryKey:   strings.TrimSpace(os.Getenv("MATRIX_RECOVERY_KEY")),
-		PickleKey:     os.Getenv("PICKLE_KEY"),
-		BearerToken:   os.Getenv("MCP_BEARER_TOKEN"),
-		DataDir:       env("DATA_DIR", "/data"),
-		ListenAddr:    env("LISTEN_ADDR", ":8080"),
-		DeviceName:    env("DEVICE_NAME", "Matrix MCP"),
-		PublicURL:     strings.TrimRight(env("PUBLIC_URL", ""), "/"),
-		OAuthPassword: os.Getenv("OAUTH_PASSWORD"),
+		Homeserver:  env("MATRIX_HOMESERVER", "http://matrix-synapse:8008"),
+		UserID:      env("MATRIX_USER_ID", ""),
+		Password:    os.Getenv("MATRIX_PASSWORD"),
+		RecoveryKey: strings.TrimSpace(os.Getenv("MATRIX_RECOVERY_KEY")),
+		PickleKey:   os.Getenv("PICKLE_KEY"),
+		BearerToken: os.Getenv("MCP_BEARER_TOKEN"),
+		DataDir:     env("DATA_DIR", "/data"),
+		ListenAddr:  env("LISTEN_ADDR", ":8080"),
+		DeviceName:  env("DEVICE_NAME", "Matrix MCP"),
+		PublicURL:   strings.TrimRight(env("PUBLIC_URL", ""), "/"),
 	}
 	cfg.BackfillPerRoom, _ = strconv.Atoi(env("BACKFILL_PER_ROOM", "200"))
 	var missing []string
@@ -71,14 +69,6 @@ func loadConfig() (Config, error) {
 	}
 	if len(cfg.BearerToken) < 32 {
 		return cfg, errors.New("MCP_BEARER_TOKEN must be at least 32 characters")
-	}
-	if cfg.OAuthPassword != "" {
-		if cfg.PublicURL == "" {
-			return cfg, errors.New("PUBLIC_URL is required when OAUTH_PASSWORD is set")
-		}
-		if len(cfg.OAuthPassword) < 12 {
-			return cfg, errors.New("OAUTH_PASSWORD must be at least 12 characters")
-		}
 	}
 	return cfg, nil
 }
@@ -134,8 +124,8 @@ func main() {
 	})
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true})
 	var oauth *OAuth
-	if cfg.OAuthPassword != "" {
-		if oauth, err = NewOAuth(ctx, app.db, cfg.PublicURL, cfg.OAuthPassword); err != nil {
+	if cfg.PublicURL != "" {
+		if oauth, err = NewOAuth(ctx, app.db, cfg.PublicURL, app.cli.UserID.String(), app.verifyLogin); err != nil {
 			log.Fatal().Err(err).Msg("failed to set up OAuth")
 		}
 		oauth.Register(mux)

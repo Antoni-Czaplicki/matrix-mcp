@@ -380,3 +380,42 @@ func (app *App) backfillRoom(ctx context.Context, roomID id.RoomID, max int) (in
 	}
 	return total, nil
 }
+
+// verifyLogin checks a username and password against the homeserver by logging in and
+// immediately logging out again. Only the account this server runs as may sign in.
+func (app *App) verifyLogin(ctx context.Context, user, password string) (bool, error) {
+	user = strings.TrimSpace(user)
+	uid := id.UserID(user)
+	if !strings.HasPrefix(user, "@") {
+		uid = id.NewUserID(strings.ToLower(user), app.cli.UserID.Homeserver())
+	}
+	if uid != app.cli.UserID {
+		return false, nil
+	}
+	tmp, err := mautrix.NewClient(app.cfg.Homeserver, "", "")
+	if err != nil {
+		return false, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	resp, err := tmp.Login(ctx, &mautrix.ReqLogin{
+		Type:                     mautrix.AuthTypePassword,
+		Identifier:               mautrix.UserIdentifier{Type: mautrix.IdentifierTypeUser, User: uid.String()},
+		Password:                 password,
+		InitialDeviceDisplayName: "Matrix MCP sign-in check",
+		StoreCredentials:         true,
+	})
+	if err != nil {
+		if errors.Is(err, mautrix.MForbidden) {
+			return false, nil
+		}
+		if errors.Is(err, mautrix.MLimitExceeded) {
+			return false, errors.New("the homeserver is rate limiting logins, try again in a minute")
+		}
+		return false, err
+	}
+	if _, err := tmp.Logout(context.WithoutCancel(ctx)); err != nil {
+		app.log.Warn().Err(err).Stringer("device_id", resp.DeviceID).Msg("could not log out the sign-in check session")
+	}
+	return resp.UserID == app.cli.UserID, nil
+}

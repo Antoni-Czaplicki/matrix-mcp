@@ -213,9 +213,9 @@ type WaitIn struct {
 }
 
 type APIIn struct {
-	Method string          `json:"method" jsonschema:"GET, POST, PUT or DELETE"`
-	Path   string          `json:"path" jsonschema:"path starting with /_matrix/ or /_synapse/, including query string"`
-	Body   json.RawMessage `json:"body,omitempty" jsonschema:"JSON request body"`
+	Method string `json:"method" jsonschema:"GET, POST, PUT or DELETE"`
+	Path   string `json:"path" jsonschema:"path starting with /_matrix/ or /_synapse/, including query string"`
+	Body   any    `json:"body,omitempty" jsonschema:"JSON request body (usually an object)"`
 }
 
 type NoArgs struct{}
@@ -854,11 +854,7 @@ func registerTools(s *mcp.Server, app *App) {
 				return nil, errors.New("invalid path")
 			}
 			full := strings.TrimRight(app.cli.HomeserverURL.String(), "/") + in.Path
-			var body any
-			if len(in.Body) > 0 {
-				body = in.Body
-			}
-			raw, err := app.cli.MakeRequest(ctx, method, full, body, nil)
+			raw, err := app.cli.MakeRequest(ctx, method, full, in.Body, nil)
 			if err != nil {
 				return nil, err
 			}

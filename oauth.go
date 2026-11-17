@@ -3,7 +3,8 @@ package main
 // Minimal single-user OAuth 2.1 authorization server, so the MCP can be added as a
 // custom connector in claude.ai, ChatGPT and other clients that only speak OAuth.
 // Supports dynamic client registration (RFC 7591), authorization code + PKCE (S256)
-// and rotating refresh tokens. Logging in means entering OAUTH_PASSWORD on the consent page.
+// and rotating refresh tokens. The consent page signs in with the Matrix account itself:
+// the username and password are checked against the homeserver.
 
 import (
 	"context"
@@ -32,9 +33,10 @@ const (
 )
 
 type OAuth struct {
-	db       *dbutil.Database
-	issuer   string // public base URL, no trailing slash
-	password string
+	db      *dbutil.Database
+	issuer  string // public base URL, no trailing slash
+	account string // Matrix user ID that may sign in
+	verify  LoginVerifier
 
 	mu       sync.Mutex
 	codes    map[string]*authCode
@@ -53,7 +55,10 @@ type oauthClient struct {
 	RedirectURIs []string `json:"redirect_uris"`
 }
 
-func NewOAuth(ctx context.Context, db *dbutil.Database, issuer, password string) (*OAuth, error) {
+// LoginVerifier checks Matrix credentials. It returns false (and no error) for wrong credentials.
+type LoginVerifier func(ctx context.Context, user, password string) (bool, error)
+
+func NewOAuth(ctx context.Context, db *dbutil.Database, issuer, account string, verify LoginVerifier) (*OAuth, error) {
 	for _, q := range []string{
 		`CREATE TABLE IF NOT EXISTS mcp_oauth_clients (client_id TEXT PRIMARY KEY, name TEXT NOT NULL, redirect_uris TEXT NOT NULL, created INTEGER NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS mcp_oauth_tokens (hash TEXT PRIMARY KEY, kind TEXT NOT NULL, client_id TEXT NOT NULL, expires INTEGER NOT NULL)`,
@@ -62,7 +67,7 @@ func NewOAuth(ctx context.Context, db *dbutil.Database, issuer, password string)
 			return nil, err
 		}
 	}
-	return &OAuth{db: db, issuer: strings.TrimRight(issuer, "/"), password: password, codes: map[string]*authCode{}}, nil
+	return &OAuth{db: db, issuer: strings.TrimRight(issuer, "/"), account: account, verify: verify, codes: map[string]*authCode{}}, nil
 }
 
 func randomToken() string {
@@ -191,6 +196,7 @@ type authRequest struct {
 	Client                                                   *oauthClient
 	ClientID, RedirectURI, State, Challenge, Resource, Scope string
 	RedirectHost                                             string
+	Account                                                  string
 	Error                                                    string
 }
 
@@ -205,6 +211,7 @@ func (o *OAuth) parseAuthRequest(r *http.Request) (*authRequest, error) {
 		return nil, errors.New("unknown client_id; the client must register first")
 	}
 	ar.Client = c
+	ar.Account = o.account
 	matched := false
 	for _, u := range c.RedirectURIs {
 		if u == ar.RedirectURI {
@@ -250,24 +257,30 @@ func (o *OAuth) handleAuthorizeForm(w http.ResponseWriter, r *http.Request) {
 	renderConsent(w, ar)
 }
 
-func (o *OAuth) checkPassword(pw string) bool {
+// checkLogin verifies credentials with a global backoff after repeated failures.
+func (o *OAuth) checkLogin(ctx context.Context, user, pw string) (bool, string) {
 	o.mu.Lock()
-	// Back off after repeated failures: one attempt per 5 seconds after 5 failures.
-	if o.failures >= 5 && time.Since(o.lastFail) < 5*time.Second {
+	if o.failures >= 5 && time.Since(o.lastFail) < 10*time.Second {
 		o.mu.Unlock()
-		return false
+		return false, "Too many failed attempts, wait a few seconds."
 	}
 	o.mu.Unlock()
-	ok := subtle.ConstantTimeCompare([]byte(pw), []byte(o.password)) == 1
+	if strings.TrimSpace(user) == "" || pw == "" {
+		return false, "Enter your Matrix username and password."
+	}
+	ok, err := o.verify(ctx, user, pw)
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if ok {
 		o.failures = 0
-	} else {
-		o.failures++
-		o.lastFail = time.Now()
+		return true, ""
 	}
-	return ok
+	o.failures++
+	o.lastFail = time.Now()
+	if err != nil {
+		return false, "Could not check the login with the homeserver: " + err.Error()
+	}
+	return false, "Wrong username or password."
 }
 
 func (o *OAuth) handleAuthorizeSubmit(w http.ResponseWriter, r *http.Request) {
@@ -289,9 +302,9 @@ func (o *OAuth) handleAuthorizeSubmit(w http.ResponseWriter, r *http.Request) {
 		redirectWithError(w, r, ar, "access_denied", "the user denied access")
 		return
 	}
-	if !o.checkPassword(r.PostForm.Get("password")) {
+	if ok, msg := o.checkLogin(r.Context(), r.PostForm.Get("username"), r.PostForm.Get("password")); !ok {
 		time.Sleep(time.Second)
-		ar.Error = "Wrong password."
+		ar.Error = msg
 		w.WriteHeader(http.StatusUnauthorized)
 		renderConsent(w, ar)
 		return
@@ -410,7 +423,7 @@ var consentTmpl = template.Must(template.New("consent").Parse(`<!doctype html>
 body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,sans-serif}
 main{width:min(420px,calc(100% - 32px));background:var(--card);border:1px solid var(--border);border-radius:14px;padding:28px}
 h1{font-size:20px;margin:0 0 8px}p{margin:0 0 16px;color:var(--muted)}b{color:var(--fg)}
-input{width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:transparent;color:var(--fg);font:inherit}
+input{margin-bottom:10px;width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:transparent;color:var(--fg);font:inherit}
 .row{display:flex;flex-direction:row-reverse;gap:10px;margin-top:16px}button{flex:1;padding:10px;border-radius:8px;border:1px solid var(--border);font:inherit;cursor:pointer;background:transparent;color:var(--fg)}
 button.primary{background:var(--accent);border-color:var(--accent);color:#fff}.err{color:#d33;margin:0 0 12px}
 </style></head><body><main>
@@ -421,7 +434,9 @@ button.primary{background:var(--accent);border-color:var(--accent);color:#fff}.e
 <input type="hidden" name="client_id" value="{{.ClientID}}"><input type="hidden" name="redirect_uri" value="{{.RedirectURI}}">
 <input type="hidden" name="state" value="{{.State}}"><input type="hidden" name="code_challenge" value="{{.Challenge}}">
 <input type="hidden" name="resource" value="{{.Resource}}"><input type="hidden" name="scope" value="{{.Scope}}">
-<input type="password" name="password" placeholder="Password" autocomplete="current-password" autofocus>
+<p>Sign in with the Matrix account <b>{{.Account}}</b>.</p>
+<input name="username" placeholder="Username" value="{{.Account}}" autocomplete="username" autocapitalize="none" spellcheck="false">
+<input type="password" name="password" placeholder="Matrix password" autocomplete="current-password" autofocus>
 <div class="row"><button class="primary" name="action" value="allow">Allow</button><button name="action" value="deny">Deny</button></div>
 </form></main></body></html>`))
 
