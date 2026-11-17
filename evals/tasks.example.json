@@ -1,0 +1,21 @@
+[
+  {
+    "id": "unanswered-dm",
+    "question": "Which person did I most recently leave without a reply in a direct chat? Answer with their name.",
+    "answers": ["<name of the person>"],
+    "notes": "Exercises list_rooms awaiting_reply / last_sender_is_me."
+  },
+  {
+    "id": "find-link",
+    "question": "In which chat did someone share a link to example.com, and who shared it? Answer as '<chat> - <person>'.",
+    "answers": ["<chat name>"],
+    "notes": "Exercises search_messages to find a chat by content instead of by name."
+  },
+  {
+    "id": "date-filter",
+    "question": "How many messages did I send on 2026-11-16? Answer with a number.",
+    "answers": ["^\\D*<number>\\D*$"],
+    "match": "regex",
+    "notes": "Exercises search_messages with sender 'me' and an after/before date range."
+  }
+]

@@ -1,0 +1,6 @@
+.secrets/
+*.zip
+/matrix-mcp
+*.local.json
+*.local.md
+evals/report*.json
