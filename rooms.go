@@ -40,6 +40,8 @@ type RoomCache struct {
 	mu      sync.RWMutex
 	rooms   map[id.RoomID]*RoomInfo
 	invites map[id.RoomID]bool
+	loading map[id.RoomID]bool // rooms joined while running that are being loaded
+	loadSem chan struct{}
 	act     map[id.RoomID]*activity
 }
 
@@ -49,7 +51,10 @@ func NewRoomCache(app *App) *RoomCache {
 		app.log.Warn().Err(err).Msg("failed to load room activity")
 		act = map[id.RoomID]*activity{}
 	}
-	return &RoomCache{app: app, rooms: map[id.RoomID]*RoomInfo{}, invites: map[id.RoomID]bool{}, act: act}
+	return &RoomCache{
+		app: app, rooms: map[id.RoomID]*RoomInfo{}, invites: map[id.RoomID]bool{},
+		loading: map[id.RoomID]bool{}, loadSem: make(chan struct{}, 4), act: act,
+	}
 }
 
 func networkOf(userID id.UserID) (network string, isBot bool) {
@@ -273,6 +278,28 @@ func (rc *RoomCache) AddInvite(roomID id.RoomID) {
 	if _, joined := rc.rooms[roomID]; !joined {
 		rc.invites[roomID] = true
 	}
+}
+
+// NoteJoined records that the account is joined to a room, so it is no longer a pending invite.
+// It returns true when the room is new to the cache and the caller should load it; the caller
+// must then call FinishLoading. With loadNew false (during startup, when LoadAll covers every
+// joined room) it only clears the invite.
+func (rc *RoomCache) NoteJoined(roomID id.RoomID, loadNew bool) bool {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	delete(rc.invites, roomID)
+	if _, known := rc.rooms[roomID]; known || rc.loading[roomID] || !loadNew {
+		return false
+	}
+	rc.loading[roomID] = true
+	return true
+}
+
+// FinishLoading ends a load started by NoteJoined. A failed load is retried on the room's next sync.
+func (rc *RoomCache) FinishLoading(roomID id.RoomID) {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	delete(rc.loading, roomID)
 }
 
 func (rc *RoomCache) Invites() []id.RoomID {

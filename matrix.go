@@ -202,6 +202,9 @@ func (app *App) Close() {
 func (app *App) onSync(ctx context.Context, resp *mautrix.RespSync, since string) bool {
 	app.lastSyncOK.Store(time.Now().Unix())
 	for roomID, room := range resp.Rooms.Join {
+		if app.rooms.NoteJoined(roomID, app.ready.Load()) {
+			go app.loadJoinedRoom(context.WithoutCancel(ctx), roomID)
+		}
 		if room.UnreadNotifications != nil {
 			app.rooms.SetUnread(ctx, roomID, room.UnreadNotifications.NotificationCount, room.UnreadNotifications.HighlightCount)
 		}
@@ -226,6 +229,18 @@ func (app *App) onSync(ctx context.Context, resp *mautrix.RespSync, since string
 		}()
 	}
 	return true
+}
+
+// loadJoinedRoom adds a room joined while the server is running to the room list and indexes its history.
+func (app *App) loadJoinedRoom(ctx context.Context, roomID id.RoomID) {
+	defer app.rooms.FinishLoading(roomID)
+	app.rooms.loadSem <- struct{}{}
+	defer func() { <-app.rooms.loadSem }()
+	if _, err := app.rooms.load(ctx, roomID); err != nil {
+		app.log.Warn().Err(err).Stringer("room_id", roomID).Msg("failed to load joined room")
+		return
+	}
+	app.backfillOnce(ctx, roomID)
 }
 
 func (app *App) onEvent(ctx context.Context, evt *event.Event) {
@@ -345,20 +360,29 @@ func (app *App) backfillAll(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		done, _ := app.store.GetKV(ctx, "backfilled:"+room.ID.String())
-		if done != "" {
-			continue
+		if app.backfillOnce(ctx, room.ID) {
+			time.Sleep(300 * time.Millisecond)
 		}
-		n, err := app.backfillRoom(ctx, room.ID, app.cfg.BackfillPerRoom)
-		if err != nil {
-			app.log.Warn().Err(err).Stringer("room_id", room.ID).Msg("backfill failed")
-			continue
-		}
-		_ = app.store.SetKV(ctx, "backfilled:"+room.ID.String(), time.Now().UTC().Format(time.RFC3339))
-		app.log.Debug().Stringer("room_id", room.ID).Int("events", n).Msg("backfilled room")
-		time.Sleep(300 * time.Millisecond)
 	}
 	app.log.Info().Msg("initial history indexing finished")
+}
+
+// backfillOnce indexes a room's history unless that already happened. It reports whether it did the work.
+func (app *App) backfillOnce(ctx context.Context, roomID id.RoomID) bool {
+	if app.cfg.BackfillPerRoom <= 0 {
+		return false
+	}
+	if done, _ := app.store.GetKV(ctx, "backfilled:"+roomID.String()); done != "" {
+		return false
+	}
+	n, err := app.backfillRoom(ctx, roomID, app.cfg.BackfillPerRoom)
+	if err != nil {
+		app.log.Warn().Err(err).Stringer("room_id", roomID).Msg("backfill failed")
+		return false
+	}
+	_ = app.store.SetKV(ctx, "backfilled:"+roomID.String(), time.Now().UTC().Format(time.RFC3339))
+	app.log.Debug().Stringer("room_id", roomID).Int("events", n).Msg("backfilled room")
+	return true
 }
 
 func (app *App) backfillRoom(ctx context.Context, roomID id.RoomID, max int) (int, error) {
