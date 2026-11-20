@@ -47,3 +47,25 @@ func TestNoteJoinedKnownRoomAndStartup(t *testing.T) {
 		t.Fatalf("invites = %v, want the invite cleared during startup too", got)
 	}
 }
+
+func TestClassifyRoom(t *testing.T) {
+	cases := []struct {
+		name   string
+		others int
+		hasBot bool
+		ghosts int
+		portal bool
+		want   string
+	}{
+		{"management room", 1, true, 0, false, "bridge_bot"},
+		{"bridged channel with only the bot", 1, true, 0, true, "group"},
+		{"bridged dm", 2, true, 1, true, "dm"},
+		{"native dm", 1, false, 0, false, "dm"},
+		{"group", 5, true, 4, true, "group"},
+	}
+	for _, c := range cases {
+		if got := classifyRoom(c.others, c.hasBot, c.ghosts, c.portal); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+}

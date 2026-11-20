@@ -135,8 +135,11 @@ func (rc *RoomCache) load(ctx context.Context, roomID id.RoomID) (*RoomInfo, err
 			info.Kind = "space"
 		}
 	}
+	// Portal rooms carry bridge state; a bridge bot's management room does not.
+	portal := false
 	for _, bt := range []event.Type{event.StateBridge, event.StateHalfShotBridge} {
 		for _, evt := range state[bt] {
+			portal = true
 			parse(evt)
 			if c, ok := evt.Content.Parsed.(*event.BridgeEventContent); ok && c.Protocol.ID != "" {
 				info.Network = normalizeNetwork(c.Protocol.ID)
@@ -170,14 +173,9 @@ func (rc *RoomCache) load(ctx context.Context, roomID id.RoomID) (*RoomInfo, err
 		}
 	}
 	if info.Kind == "" {
-		switch {
-		case len(others) == 1 && bot != "":
-			info.Kind = "bridge_bot"
+		info.Kind = classifyRoom(len(others), bot != "", ghosts, portal)
+		if info.Kind == "bridge_bot" {
 			info.BotUser = bot
-		case len(others) == 1 || (len(others) == 2 && bot != "" && ghosts == 1):
-			info.Kind = "dm"
-		default:
-			info.Kind = "group"
 		}
 	}
 	if info.Name == "" {
@@ -213,6 +211,23 @@ func (rc *RoomCache) load(ctx context.Context, roomID id.RoomID) (*RoomInfo, err
 	rc.rooms[roomID] = info
 	delete(rc.invites, roomID)
 	return info, nil
+}
+
+// classifyRoom picks the kind of a non-space room from its other members.
+// A room shared only with a bridge bot is its management room unless it has
+// bridge state: bridged channels (e.g. Discord guild channels, whose ghosts
+// are not room members) look the same but deliver messages to real people.
+func classifyRoom(others int, hasBot bool, ghosts int, portal bool) string {
+	switch {
+	case others == 1 && hasBot && !portal:
+		return "bridge_bot"
+	case others == 1 && hasBot:
+		return "group"
+	case others == 1 || (others == 2 && hasBot && ghosts == 1):
+		return "dm"
+	default:
+		return "group"
+	}
 }
 
 func normalizeNetwork(protocol string) string {
