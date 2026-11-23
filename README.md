@@ -24,6 +24,7 @@ It logs in as its own Matrix device, decrypts messages, and keeps a local full-t
 | `send_message` | Markdown or plain text, with replies and threads |
 | `send_file`, `send_reaction`, `edit_message`, `delete_message`, `mark_read` | Messaging |
 | `download_media` | Decrypt and return attachments. Images come inline as a 768 px thumbnail by default (`variant: full` for the original); audio also inline |
+| `decrypt_events` | Decrypt raw events you already have, e.g. the originals of deleted messages from the homeserver database; `download_media` also takes such a raw `event` |
 | `join_room`, `leave_room`, `invite_user`, `remove_user`, `create_room`, `update_room` | Room management, including tags |
 | `bridge_command` | Send a command to a bridge bot (`help`, `list-logins`, `search`, `start-chat`, …) and collect its replies |
 | `matrix_api` | Raw client-server or Synapse admin API call |
