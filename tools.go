@@ -165,6 +165,12 @@ type DownloadIn struct {
 	Room    string `json:"room" jsonschema:"room ID, alias or unique part of the room name"`
 	EventID string `json:"message_id" jsonschema:"image/video/audio/file message to download"`
 	Variant string `json:"variant,omitempty" jsonschema:"for images: thumbnail (default, longest side 768 px, cheap) or full (original resolution)"`
+	Event   map[string]any `json:"event,omitempty" jsonschema:"optional raw event JSON to use instead of fetching message_id, e.g. the original of a deleted message from decrypt_events"`
+}
+
+type DecryptIn struct {
+	Room   string           `json:"room" jsonschema:"room ID, alias or unique part of the room name the events belong to"`
+	Events []map[string]any `json:"events" jsonschema:"raw Matrix events (as returned by matrix_api or the Synapse database), up to 500"`
 }
 
 type JoinIn struct {
@@ -557,13 +563,44 @@ func registerTools(s *mcp.Server, app *App) {
 			return map[string]any{"message_id": resp.EventID, "filename": filename, "size": content.Info.Size}, nil
 		})
 
+	tool(s, app, &mcp.Tool{Name: "decrypt_events", Description: "Decrypt and parse raw Matrix events you already have (e.g. the original content of deleted messages recovered from the homeserver database) with this device's keys. Returns them as messages, in the given order; download their attachments with download_media and the raw event.", Annotations: readOnly("Decrypt events")},
+		func(ctx context.Context, in DecryptIn) (any, error) {
+			room, err := app.resolveRoom(ctx, in.Room)
+			if err != nil {
+				return nil, err
+			}
+			if len(in.Events) == 0 || len(in.Events) > 500 {
+				return nil, errors.New("events must hold 1 to 500 events")
+			}
+			out := make([]any, 0, len(in.Events))
+			for _, raw := range in.Events {
+				evt, err := rawEvent(raw)
+				if err != nil {
+					out = append(out, map[string]any{"error": err.Error()})
+					continue
+				}
+				evt.RoomID = room.ID
+				if m := app.toMessage(ctx, app.decryptIfNeeded(ctx, evt)); m != nil {
+					out = append(out, m)
+				} else {
+					out = append(out, map[string]any{"message_id": evt.ID, "kind": "skipped"})
+				}
+			}
+			return map[string]any{"room": room.Name, "room_id": room.ID, "messages": out}, nil
+		})
+
 	tool(s, app, &mcp.Tool{Name: "download_media", Description: "Download (and decrypt) the attachment of a message. Images are returned inline so you can look at them, as a 768 px thumbnail unless variant is full; audio inline; other files as embedded resources up to 8 MB.", Annotations: readOnly("Download media")},
 		func(ctx context.Context, in DownloadIn) (any, error) {
 			room, err := app.resolveRoom(ctx, in.Room)
 			if err != nil {
 				return nil, err
 			}
-			evt, err := app.cli.GetEvent(ctx, room.ID, id.EventID(in.EventID))
+			var evt *event.Event
+			if in.Event != nil {
+				evt, err = rawEvent(in.Event)
+			} else {
+				evt, err = app.cli.GetEvent(ctx, room.ID, id.EventID(in.EventID))
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -950,4 +987,19 @@ func loadFile(ctx context.Context, in SendFileIn) (data []byte, filename, mime s
 		filename = "file"
 	}
 	return data, filename, mime, nil
+}
+
+// rawEvent turns a raw event object back into an event, dropping any redaction marker so the
+// original content is used.
+func rawEvent(raw map[string]any) (*event.Event, error) {
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return nil, err
+	}
+	var evt event.Event
+	if err := json.Unmarshal(data, &evt); err != nil {
+		return nil, fmt.Errorf("invalid event: %w", err)
+	}
+	evt.Unsigned.RedactedBecause = nil
+	return &evt, nil
 }
