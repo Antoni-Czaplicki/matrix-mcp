@@ -162,9 +162,9 @@ type SendFileIn struct {
 }
 
 type DownloadIn struct {
-	Room    string `json:"room" jsonschema:"room ID, alias or unique part of the room name"`
-	EventID string `json:"message_id" jsonschema:"image/video/audio/file message to download"`
-	Variant string `json:"variant,omitempty" jsonschema:"for images: thumbnail (default, longest side 768 px, cheap) or full (original resolution)"`
+	Room    string         `json:"room" jsonschema:"room ID, alias or unique part of the room name"`
+	EventID string         `json:"message_id" jsonschema:"image/video/audio/file message to download"`
+	Variant string         `json:"variant,omitempty" jsonschema:"for images: thumbnail (default, longest side 768 px, cheap) or full (original resolution)"`
 	Event   map[string]any `json:"event,omitempty" jsonschema:"optional raw event JSON to use instead of fetching message_id, e.g. the original of a deleted message from decrypt_events"`
 }
 
