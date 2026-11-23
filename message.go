@@ -105,7 +105,7 @@ func (app *App) toMessage(ctx context.Context, evt *event.Event) *Message {
 				}
 				return m
 			}
-			if reply := rel.GetReplyTo(); reply != "" {
+			if reply := rel.GetNonFallbackReplyTo(); reply != "" { // thread events carry a fallback reply for clients without threads
 				m.ReplyTo = reply.String()
 			}
 			if rel.Type == event.RelThread {
