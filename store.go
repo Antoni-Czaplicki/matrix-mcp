@@ -107,6 +107,29 @@ func (s *Store) SetKV(ctx context.Context, key, value string) error {
 	return err
 }
 
+// BindMatrixDevice pins a token-mode store to its Matrix user and device
+// before the crypto helper creates or publishes any keys.
+func (s *Store) BindMatrixDevice(ctx context.Context, user id.UserID, device id.DeviceID) error {
+	return s.db.DoTxn(ctx, nil, func(ctx context.Context) error {
+		for _, binding := range []struct{ key, value string }{
+			{"matrix_user_id", user.String()},
+			{"matrix_device_id", device.String()},
+		} {
+			if _, err := s.db.Exec(ctx, `INSERT INTO mcp_kv (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING`, binding.key, binding.value); err != nil {
+				return err
+			}
+			stored, err := s.GetKV(ctx, binding.key)
+			if err != nil {
+				return err
+			}
+			if stored != binding.value {
+				return errors.New("token-mode store belongs to a different Matrix account or device")
+			}
+		}
+		return nil
+	})
+}
+
 func (s *Store) Index(ctx context.Context, m *Message) error {
 	if m.EventID == "" {
 		return nil

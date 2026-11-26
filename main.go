@@ -24,6 +24,7 @@ type Config struct {
 	Homeserver      string
 	UserID          string
 	Password        string
+	AccessToken     string
 	RecoveryKey     string
 	PickleKey       string
 	BearerToken     string
@@ -46,6 +47,7 @@ func loadConfig() (Config, error) {
 		Homeserver:  env("MATRIX_HOMESERVER", "http://matrix-synapse:8008"),
 		UserID:      env("MATRIX_USER_ID", ""),
 		Password:    os.Getenv("MATRIX_PASSWORD"),
+		AccessToken: env("MATRIX_ACCESS_TOKEN", ""),
 		RecoveryKey: strings.TrimSpace(os.Getenv("MATRIX_RECOVERY_KEY")),
 		PickleKey:   os.Getenv("PICKLE_KEY"),
 		BearerToken: os.Getenv("MCP_BEARER_TOKEN"),
@@ -57,8 +59,8 @@ func loadConfig() (Config, error) {
 	cfg.BackfillPerRoom, _ = strconv.Atoi(env("BACKFILL_PER_ROOM", "200"))
 	var missing []string
 	for name, v := range map[string]string{
-		"MATRIX_USER_ID": cfg.UserID, "MATRIX_PASSWORD": cfg.Password,
-		"PICKLE_KEY": cfg.PickleKey, "MCP_BEARER_TOKEN": cfg.BearerToken,
+		"MATRIX_USER_ID": cfg.UserID,
+		"PICKLE_KEY":     cfg.PickleKey, "MCP_BEARER_TOKEN": cfg.BearerToken,
 	} {
 		if v == "" {
 			missing = append(missing, name)
@@ -67,8 +69,19 @@ func loadConfig() (Config, error) {
 	if len(missing) > 0 {
 		return cfg, errors.New("missing required env: " + strings.Join(missing, ", "))
 	}
+	if (cfg.Password == "") == (cfg.AccessToken == "") {
+		return cfg, errors.New("set exactly one of MATRIX_PASSWORD or MATRIX_ACCESS_TOKEN")
+	}
 	if len(cfg.BearerToken) < 32 {
 		return cfg, errors.New("MCP_BEARER_TOKEN must be at least 32 characters")
+	}
+	if cfg.AccessToken != "" {
+		if cfg.PublicURL != "" {
+			return cfg, errors.New("PUBLIC_URL requires MATRIX_PASSWORD for MCP OAuth; use MCP bearer authentication with MATRIX_ACCESS_TOKEN")
+		}
+		if cfg.AccessToken == cfg.BearerToken {
+			return cfg, errors.New("MATRIX_ACCESS_TOKEN and MCP_BEARER_TOKEN must be different")
+		}
 	}
 	return cfg, nil
 }

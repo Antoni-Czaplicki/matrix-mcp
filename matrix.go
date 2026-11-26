@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,7 +50,7 @@ type waiter struct {
 	ch   chan *event.Event
 }
 
-func NewApp(ctx context.Context, cfg Config, log zerolog.Logger) (*App, error) {
+func NewApp(ctx context.Context, cfg Config, log zerolog.Logger) (_ *App, err error) {
 	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
 		return nil, err
 	}
@@ -58,27 +59,52 @@ func NewApp(ctx context.Context, cfg Config, log zerolog.Logger) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid MATRIX_USER_ID: %w", err)
 	}
-	cli, err := mautrix.NewClient(cfg.Homeserver, "", "")
+	cli, err := newMatrixClient(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
 	cli.Log = log.With().Str("component", "matrix").Logger()
-	dbPath := filepath.Join(cfg.DataDir, "matrix-mcp.db")
+	tokenMode := cfg.AccessToken != ""
+	dbName := "matrix-mcp.db"
+	if tokenMode {
+		// A pre-issued device has its own keys; leave password-mode state alone.
+		dbName = "matrix-mcp-token.db"
+	}
+	dbPath := filepath.Join(cfg.DataDir, dbName)
+	if tokenMode {
+		dbPath = (&url.URL{Path: dbPath}).EscapedPath()
+	}
 	db, err := dbutil.NewWithDialect(fmt.Sprintf("file:%s?_txlock=immediate", dbPath), "sqlite3-fk-wal")
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = db.Close()
+		}
+	}()
+	store := &Store{db: db}
+	if tokenMode {
+		if err = store.Init(ctx); err != nil {
+			return nil, fmt.Errorf("init store: %w", err)
+		}
+		if err = store.BindMatrixDevice(ctx, cli.UserID, cli.DeviceID); err != nil {
+			return nil, fmt.Errorf("bind store to Matrix device: %w", err)
+		}
 	}
 	helper, err := cryptohelper.NewCryptoHelper(cli, []byte(cfg.PickleKey), db)
 	if err != nil {
 		return nil, err
 	}
-	helper.LoginAs = &mautrix.ReqLogin{
-		Type:                     mautrix.AuthTypePassword,
-		Identifier:               mautrix.UserIdentifier{Type: mautrix.IdentifierTypeUser, User: localpart},
-		Password:                 cfg.Password,
-		InitialDeviceDisplayName: cfg.DeviceName,
+	if !tokenMode {
+		helper.LoginAs = &mautrix.ReqLogin{
+			Type:                     mautrix.AuthTypePassword,
+			Identifier:               mautrix.UserIdentifier{Type: mautrix.IdentifierTypeUser, User: localpart},
+			Password:                 cfg.Password,
+			InitialDeviceDisplayName: cfg.DeviceName,
+		}
 	}
-	app := &App{cfg: cfg, log: log, cli: cli, crypto: helper, db: db, waiters: map[int]*waiter{}}
+	app := &App{cfg: cfg, log: log, cli: cli, crypto: helper, db: db, store: store, waiters: map[int]*waiter{}}
 	helper.DecryptErrorCallback = func(evt *event.Event, err error) {
 		app.log.Debug().Err(err).Stringer("event_id", evt.ID).Msg("live event could not be decrypted")
 	}
@@ -86,9 +112,10 @@ func NewApp(ctx context.Context, cfg Config, log zerolog.Logger) (*App, error) {
 		return nil, fmt.Errorf("crypto init / login: %w", err)
 	}
 	cli.Crypto = helper
-	app.store = &Store{db: db}
-	if err = app.store.Init(ctx); err != nil {
-		return nil, fmt.Errorf("init store: %w", err)
+	if !tokenMode {
+		if err = store.Init(ctx); err != nil {
+			return nil, fmt.Errorf("init store: %w", err)
+		}
 	}
 	app.rooms = NewRoomCache(app)
 	app.log.Info().Stringer("user_id", cli.UserID).Stringer("device_id", cli.DeviceID).Msg("logged in")
