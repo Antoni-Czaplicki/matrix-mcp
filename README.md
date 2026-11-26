@@ -33,17 +33,18 @@ Rooms can be referenced by ID, alias or a unique part of their name. Read-only t
 
 ## Running
 
-The server needs a Matrix account it can log into with a password, ideally on the same network as the homeserver.
+The server needs a Matrix account, ideally on the same network as the homeserver. Provide either a password or an access token for a dedicated Matrix device.
 
 | Variable | Required | Notes |
 | --- | --- | --- |
 | `MATRIX_HOMESERVER` | | Homeserver URL. Default `http://matrix-synapse:8008` |
 | `MATRIX_USER_ID` | yes | e.g. `@me:example.com` |
-| `MATRIX_PASSWORD` | yes | Used once to create the device; the session is stored afterwards |
+| `MATRIX_PASSWORD` | one of these | Logs into the Matrix account and reuses the device from the crypto store on subsequent starts |
+| `MATRIX_ACCESS_TOKEN` | one of these | Access token for a dedicated Matrix device, for example a [MAS compatibility token](https://element-hq.github.io/matrix-authentication-service/reference/cli/manage.html#manage-issue-compatibility-token) |
 | `MATRIX_RECOVERY_KEY` | | Recovery (SSSS) key. Verifies the device and imports the key backup so old messages decrypt |
 | `PICKLE_KEY` | yes | Encrypts the crypto store. Never change it, or the device has to be recreated |
 | `MCP_BEARER_TOKEN` | yes | Static client token, at least 32 characters |
-| `PUBLIC_URL` | for OAuth | Public base URL, e.g. `https://matrix-mcp.example.com`. Setting it enables OAuth for custom connectors |
+| `PUBLIC_URL` | for OAuth | Public base URL, e.g. `https://matrix-mcp.example.com`. Enables OAuth for custom connectors in password mode |
 | `TZ` | | Time zone for date filters without an explicit offset, e.g. `Europe/Warsaw` |
 | `BACKFILL_PER_ROOM` | | Messages indexed per room on first start. Default 200 |
 | `DATA_DIR`, `LISTEN_ADDR`, `DEVICE_NAME` | | Defaults `/data`, `:8080`, `Matrix MCP` |
@@ -57,6 +58,12 @@ docker run -d --name matrix-mcp -p 8080:8080 -v matrix-mcp-data:/data \
 ```
 
 Put it behind HTTPS. Keep the `/data` volume: it holds the device keys, the crypto store and the search index.
+
+### Homeservers with password login disabled
+
+Set `MATRIX_ACCESS_TOKEN` instead of `MATRIX_PASSWORD`. The server checks that the token belongs to `MATRIX_USER_ID` and reads its device ID from Matrix. Use a new device dedicated to this MCP instance, with no published keys. Token mode keeps its own crypto store and index in `DATA_DIR/matrix-mcp-token.db`. If you switch from password mode, keep your previous database and provision a new device for token mode. Keep the token-mode data directory for later starts, and use a fresh data directory for a different account or device. A replacement token must belong to the same account and device. `DEVICE_NAME` only applies when the server logs in with a password.
+
+Use a long-lived token or replace it before expiry and restart the MCP server. Leave `PUBLIC_URL` unset and use the separate `MCP_BEARER_TOKEN` to connect clients. The built-in OAuth consent screen uses Matrix password login.
 
 ## Connecting clients
 
